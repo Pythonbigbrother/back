@@ -1,51 +1,47 @@
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from pytube import YouTube
+import subprocess
+import random
 import os
-import uuid
-import yt_dlp
 
 app = FastAPI()
 
-DOWNLOAD_DIR = "downloads"
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+# Allow CORS from any origin or replace with your domain
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class DownloadRequest(BaseModel):
     url: str
-    type: str
+    format: str  # 'mp4' or 'mp3'
+
+# Optional proxy list
+FREE_PROXIES = [
+    "142.93.162.127:3128",
+    "64.225.8.107:9981",
+    "159.203.61.169:8080",
+    "51.222.13.193:10084",
+    "45.77.157.167:3128"
+]
 
 @app.post("/download")
-async def download_video(req: DownloadRequest):
+async def download_media(req: DownloadRequest):
+    proxy = random.choice(FREE_PROXIES)
+    cmd = [
+        "yt-dlp",
+        "--proxy", f"http://{proxy}",
+        "--cookies", "youtube_cookies.txt",
+        "-f", req.format,
+        "-o", "downloads/%(title)s.%(ext)s",
+        req.url
+    ]
+
     try:
-        url = req.url
-        mode = req.type.lower()
-        filename = f"{uuid.uuid4()}.mp4" if mode == "video" else f"{uuid.uuid4()}.mp3"
-        output_path = os.path.join(DOWNLOAD_DIR, filename)
-
-        if "instagram.com" in url or "youtu" in url:
-            ydl_opts = {
-                'format': 'bestaudio/best' if mode == 'audio' else 'best',
-                'outtmpl': output_path,
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': '192',
-                }] if mode == 'audio' else []
-            }
-
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
-
-            return JSONResponse({"success": True, "download_url": f"/file/{filename}"})
-        else:
-            return JSONResponse({"success": False, "error": "Unsupported platform"})
-    except Exception as e:
-        return JSONResponse({"success": False, "error": str(e)})
-
-@app.get("/file/{filename}")
-async def serve_file(filename: str):
-    file_path = os.path.join(DOWNLOAD_DIR, filename)
-    if os.path.exists(file_path):
-        return FileResponse(file_path, media_type='application/octet-stream', filename=filename)
-    return JSONResponse({"success": False, "error": "File not found"})
+        subprocess.run(cmd, check=True)
+        return {"success": True, "proxy": proxy}
+    except subprocess.CalledProcessError as e:
+        return {"success": False, "error": e.stderr or str(e), "proxy": proxy}
